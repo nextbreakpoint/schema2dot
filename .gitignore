@@ -2,3 +2,5 @@ target
 graph.dot
 graph.svg
 .idea
+graph.png
+dependency-reduced-pom.xml

@@ -1,4 +1,4 @@
-package com.nextbreakpoint.schema2git;
+package com.nextbreakpoint.schema2dot;
 
 import java.io.FileInputStream;
 import java.io.FileWriter;
