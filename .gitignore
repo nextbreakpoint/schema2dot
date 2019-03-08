@@ -4,3 +4,4 @@ graph.svg
 .idea
 graph.png
 dependency-reduced-pom.xml
+*-ddl.sql

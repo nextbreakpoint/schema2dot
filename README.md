@@ -14,7 +14,7 @@ Create an empty database:
 
 Create tables and constraints from a DDL file:
 
-    docker run -it --rm -v $(pwd):/script --link some-postgres:postgres postgres psql -h postgres -U postgres -d test  -f /script/example-ddl.sql
+    docker run -it --rm -v $(pwd):/script --link some-postgres:postgres postgres psql -h postgres -U postgres -d test  -f /script/ddl.sql
 
 Create or edit the configuration file:
 
