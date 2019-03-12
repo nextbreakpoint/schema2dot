@@ -1,6 +1,6 @@
-# schema2dot (WIP)
+# schema2dot (experimental)
 
-Generate graph file using dot format from database schema
+Generate a graph file in dot format from a database schema.
 
 ## How to use
 
@@ -10,7 +10,7 @@ Run Postgres database using Docker:
 
 Create an empty database:
 
-    docker run -it --rm -v $(pwd):/script --link some-postgres:postgres postgres psql -h postgres -U postgres -c "create database test" 
+    docker run -it --rm -v $(pwd):/script --link some-postgres:postgres postgres psql -h postgres -U postgres -c "create database test"
 
 Create tables and constraints from a DDL file:
 
@@ -19,7 +19,7 @@ Create tables and constraints from a DDL file:
 Create or edit the configuration file:
 
     cat test.properties
-    
+
     jdbc.url=jdbc:postgresql://localhost/test
     jdbc.username=postgres
     jdbc.password=password
@@ -27,16 +27,15 @@ Create or edit the configuration file:
 Build the schema2dot command (requires Maven):
 
     mvn clean package
-     
+
 Generate the graph from the database schema:
 
     java -jar target/com.nextbreakpoint.schema2dot-1.0.jar test.properties
-        
+
 Generate a PNG image from the graph (requires Graphviz):
-     
+
     dot -Tpng graph.dot > graph.png
 
 Generate a SVG image from the graph (requires Graphviz):
 
-    dot -Tsvg graph.dot > graph.svg 
-    
+    dot -Tsvg graph.dot > graph.svg
