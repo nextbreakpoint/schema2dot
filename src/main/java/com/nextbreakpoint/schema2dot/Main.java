@@ -11,6 +11,7 @@ import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.util.Properties;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -49,6 +50,23 @@ public class Main {
             try {
                 return func.apply(rs);
             } catch (Exception e) {
+                e.printStackTrace();
+                throw new RuntimeException(e);
+            }
+        };
+    }
+
+    @FunctionalInterface
+    private interface RuntimeConsumer<I> {
+        void accept(I in) throws Exception;
+    }
+
+    private static <I> Consumer<I> wrapConsumer(RuntimeConsumer<I> func) {
+        return (rs) -> {
+            try {
+                func.accept(rs);
+            } catch (Exception e) {
+                e.printStackTrace();
                 throw new RuntimeException(e);
             }
         };
@@ -56,75 +74,68 @@ public class Main {
 
     private void run(String jdbcUrl, String jdbcUsername, String jdbcPassword) {
         try (Connection conn = DriverManager.getDriver(jdbcUrl).connect(jdbcUrl, createJdbcProperties(jdbcUsername, jdbcPassword))) {
-            Schema schema = new Schema("public");
+            Database database = new Database();
 
-            listSchemas(conn);
+            try (FileWriter writer = new FileWriter("graph.dot")) {
+                write(writer, "digraph database {\n");
+                write(writer, "\tsplines=true; overlap=portho; model=subset;\n");
+                write(writer, "\tedge [color=gray50, fontname=Calibri, fontsize=11]\n");
+                write(writer, "\tnode [shape=plaintext, fontname=Calibri, fontsize=11]\n");
 
-            scanTables(conn, schema);
+                scanSchemas(conn, database);
 
-            schema.getTables()
-                    .forEach(table -> processColumns(conn, schema, table.getName()));
+                database.getSchemas().forEach(wrapConsumer(schema -> scanTables(conn, schema)));
 
-            schema.getTables()
-                    .forEach(table -> processKeys(conn, schema, table.getName()));
+                database.getSchemas().forEach(wrapConsumer(schema -> schema.getTables().forEach(wrapConsumer(table -> scanColumns(conn, schema, table.getName())))));
 
-            Set<String> tableNames = schema.getTables().stream()
-                    .map(Table::getName)
-                    .collect(Collectors.toSet());
+                database.getSchemas().forEach(wrapConsumer(schema -> schema.getTables().forEach(wrapConsumer(table -> scanExportedKeys(conn, schema, table.getName())))));
 
-            generateGraph(schema, tableNames);
+                database.getSchemas().forEach(wrapConsumer(schema -> schema.getTables().forEach(wrapConsumer(table -> scanImportedKeys(conn, schema, table.getName())))));
+
+                database.getSchemas().forEach(wrapConsumer(schema -> generateNodes(writer, schema, getTableNames(schema))));
+
+                database.getSchemas().forEach(wrapConsumer(schema -> generateConnections(writer, schema, getTableNames(schema))));
+
+                write(writer, "}");
+            }
         } catch (Exception e) {
+            e.printStackTrace();
             throw new RuntimeException(e);
         }
     }
 
-    private void processColumns(Connection conn, Schema schema, String tableName) {
-        try {
-            scanColumns(conn, tableName, schema);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+    private Set<String> getTableNames(Schema schema) {
+        return schema.getTables().stream()
+                .map(Table::getName)
+                .collect(Collectors.toSet());
     }
 
-    private void processKeys(Connection conn, Schema schema, String tableName) {
-        try {
-            scanExportedKeys(conn, tableName, schema);
-            scanImportedKeys(conn, tableName, schema);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    private void generateGraph(Schema schema, Set<String> tableNames) throws IOException {
-        try (FileWriter writer = new FileWriter("graph.dot")) {
-            write(writer, "digraph " + schema.getName() + " {\n");
-            write(writer, "\tsplines=true; overlap=portho; model=subset;\n");
-            write(writer, "\tedge [color=gray50, fontname=Calibri, fontsize=11]\n");
-            write(writer, "\tnode [shape=plaintext, fontname=Calibri, fontsize=11]\n");
-            schema.getTables().stream().filter(table -> tableNames.contains(table.getName())).forEach(table -> {
-                StringBuilder builder = new StringBuilder();
-                builder.append("<<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\">\n");
-                builder.append("\t\t<TR><TD ALIGN=\"center\" COLSPAN=\"2\"><B>").append(table.getName().toUpperCase()).append("</B></TD></TR>\n");
-                builder.append("\t\t<TR><TD ALIGN=\"left\">Name</TD><TD ALIGN=\"left\">Type</TD></TR>\n");
-                table.getColumns().forEach(column -> {
-                    if (table.getRelationship(column.getName()) != null) {
-                        builder.append("\t\t<TR><TD ALIGN=\"left\" PORT=\"").append(column.getName()).append("\">").append(column.getName().toUpperCase()).append("</TD><TD ALIGN=\"left\">").append(column.getType().toUpperCase()).append("</TD></TR>\n");
-                    } else {
-                        builder.append("\t\t<TR><TD ALIGN=\"left\">").append(column.getName().toUpperCase()).append("</TD><TD ALIGN=\"left\">").append(column.getType().toUpperCase()).append("</TD></TR>\n");
-                    }
-                });
-                builder.append("\t</TABLE>>");
-                String label = builder.toString();
-                write(writer, "\t" + escape(table.getName().toUpperCase()) + " [label=" + label + "];\n");
+    private void generateNodes(Writer writer, Schema schema, Set<String> tableNames) throws IOException {
+        schema.getTables().stream().filter(table -> tableNames.contains(table.getName())).forEach(table -> {
+            StringBuilder builder = new StringBuilder();
+            builder.append("<<TABLE BORDER=\"0\" CELLBORDER=\"1\" CELLSPACING=\"0\">\n");
+            builder.append("\t\t<TR><TD ALIGN=\"center\" COLSPAN=\"2\"><B>").append(table.getSchema().getName().toUpperCase()).append(".").append(table.getName().toUpperCase()).append("</B></TD></TR>\n");
+            builder.append("\t\t<TR><TD ALIGN=\"left\">Name</TD><TD ALIGN=\"left\">Type</TD></TR>\n");
+            table.getColumns().forEach(column -> {
+                if (table.getRelationship(column.getName()) != null) {
+                    builder.append("\t\t<TR><TD ALIGN=\"left\" PORT=\"").append(column.getName()).append("\">").append(column.getName().toUpperCase()).append("</TD><TD ALIGN=\"left\">").append(column.getType().toUpperCase()).append("</TD></TR>\n");
+                } else {
+                    builder.append("\t\t<TR><TD ALIGN=\"left\">").append(column.getName().toUpperCase()).append("</TD><TD ALIGN=\"left\">").append(column.getType().toUpperCase()).append("</TD></TR>\n");
+                }
             });
-            schema.getTables().stream().flatMap(table -> table.getRelationships().stream()).filter(Relationship::getExported).forEach(relationship -> {
-                write(writer, "\t" + relationship.getFromColumn().getTable().getName().toUpperCase());
-                write(writer, " -> ");
-                write(writer, relationship.getToColumn().getTable().getName().toUpperCase());
-                write(writer, " [label=\"" + relationship.getFromColumn().getName().toUpperCase()  + ":" + relationship.getToColumn().getName().toUpperCase() + "\"];\n");
-            });
-            write(writer, "}");
-        }
+            builder.append("\t</TABLE>>");
+            String label = builder.toString();
+            write(writer, "\t" + escape(table.getName().toUpperCase()) + " [label=" + label + "];\n");
+        });
+    }
+
+    private void generateConnections(Writer writer, Schema schema, Set<String> tableNames) throws IOException {
+        schema.getTables().stream().flatMap(table -> table.getRelationships().stream()).filter(Relationship::getExported).forEach(relationship -> {
+            write(writer, "\t" + relationship.getFromColumn().getTable().getName().toUpperCase());
+            write(writer, " -> ");
+            write(writer, relationship.getToColumn().getTable().getName().toUpperCase());
+            write(writer, " [label=\"" + relationship.getFromColumn().getName().toUpperCase()  + ":" + relationship.getToColumn().getName().toUpperCase() + "\"];\n");
+        });
     }
 
     private String escape(String name) {
@@ -143,14 +154,16 @@ public class Main {
         System.out.println(text);
     }
 
-    private void listSchemas(Connection conn) throws SQLException {
+    private void scanSchemas(Connection conn, Database database) throws SQLException {
         println(SEPARATOR);
         println("List schemas");
         println(SEPARATOR);
         try (ResultSet catalogs = conn.getMetaData().getSchemas()) {
             printColumnNames(catalogs.getMetaData());
             while (catalogs.next()) {
-                System.out.println(wrapFunction((ResultSet rs) -> rs.getString("TABLE_SCHEM")).apply(catalogs));
+                final Schema schema = new Schema(database, catalogs.getString("TABLE_SCHEM"));
+                println("schema " + schema.getName());
+                database.addSchema(schema);
             }
         }
     }
@@ -162,22 +175,22 @@ public class Main {
         try (ResultSet tables = conn.getMetaData().getTables(null, schema.getName(), "%", TYPES)) {
             printColumnNames(tables.getMetaData());
             while (tables.next()) {
-                String tableName = wrapFunction((ResultSet rs) -> rs.getString("TABLE_NAME")).apply(tables);
+                String tableName = tables.getString("TABLE_NAME");
                 println("table " + tableName);
                 schema.addTable(new Table(schema, tableName));
             }
         }
     }
 
-    private void scanColumns(Connection conn, String tableName, Schema schema) throws SQLException {
+    private void scanColumns(Connection conn, Schema schema, String tableName) throws SQLException {
         println(SEPARATOR);
         println("List columns for table " + tableName);
         println(SEPARATOR);
         try (ResultSet columns = conn.getMetaData().getColumns(null, schema.getName(), tableName, "%")) {
             printColumnNames(columns.getMetaData());
             while (columns.next()) {
-                String columnName = wrapFunction((ResultSet rs) -> rs.getString("COLUMN_NAME")).apply(columns);
-                String columnType = wrapFunction((ResultSet rs) -> rs.getString("TYPE_NAME")).apply(columns);
+                String columnName = columns.getString("COLUMN_NAME");
+                String columnType = columns.getString("TYPE_NAME");
                 println("column " + columnName + ", " + columnType);
                 Table table = schema.getTable(tableName);
                 table.addColumn(new Column(table, columnName, columnType));
@@ -185,34 +198,36 @@ public class Main {
         }
     }
 
-    private void scanExportedKeys(Connection conn, String tableName, Schema schema) throws SQLException {
+    private void scanExportedKeys(Connection conn, Schema schema, String tableName) throws SQLException {
         println(SEPARATOR);
         println("List exported keys for table " + tableName);
         println(SEPARATOR);
         try (ResultSet columns = conn.getMetaData().getExportedKeys(null, schema.getName(), tableName)) {
             printColumnNames(columns.getMetaData());
             while (columns.next()) {
-                String toColumnName = wrapFunction((ResultSet rs) -> rs.getString("FKCOLUMN_NAME")).apply(columns);
-                String fromColumnName = wrapFunction((ResultSet rs) -> rs.getString("PKCOLUMN_NAME")).apply(columns);
-                String toTableName = wrapFunction((ResultSet rs) -> rs.getString("FKTABLE_NAME")).apply(columns);
+                String fromColumnName = columns.getString("PKCOLUMN_NAME");
+                String toColumnName = columns.getString("FKCOLUMN_NAME");
+                String toTableName = columns.getString("FKTABLE_NAME");
+                String toSchemaName = columns.getString("FKTABLE_SCHEM");
                 println("exported key " + tableName + "." + fromColumnName + " -> " + toTableName + "." + toColumnName);
-                schema.getTable(tableName).addRelationship(new Relationship(schema.getTable(tableName).getColumn(fromColumnName), schema.getTable(toTableName).getColumn(toColumnName), true));
+                schema.getTable(tableName).addRelationship(new Relationship(schema.getTable(tableName).getColumn(fromColumnName), schema.getDatabase().getSchema(toSchemaName).getTable(toTableName).getColumn(toColumnName), true));
             }
         }
     }
 
-    private void scanImportedKeys(Connection conn, String tableName, Schema schema) throws SQLException {
+    private void scanImportedKeys(Connection conn, Schema schema, String tableName) throws SQLException {
         println(SEPARATOR);
         println("List imported keys for table " + tableName);
         println(SEPARATOR);
         try (ResultSet columns = conn.getMetaData().getImportedKeys(null, schema.getName(), tableName)) {
             printColumnNames(columns.getMetaData());
             while (columns.next()) {
-                String fromColumnName = wrapFunction((ResultSet rs) -> rs.getString("FKCOLUMN_NAME")).apply(columns);
-                String toColumnName = wrapFunction((ResultSet rs) -> rs.getString("PKCOLUMN_NAME")).apply(columns);
-                String toTableName = wrapFunction((ResultSet rs) -> rs.getString("PKTABLE_NAME")).apply(columns);
+                String fromColumnName = columns.getString("FKCOLUMN_NAME");
+                String toColumnName = columns.getString("PKCOLUMN_NAME");
+                String toTableName =  columns.getString("PKTABLE_NAME");
+                String toSchemaName = columns.getString("PKTABLE_SCHEM");
                 println("imported key " + tableName + "." + fromColumnName + " -> " + toTableName + "." + toColumnName);
-                schema.getTable(tableName).addRelationship(new Relationship(schema.getTable(tableName).getColumn(fromColumnName), schema.getTable(toTableName).getColumn(toColumnName), false));
+                schema.getTable(tableName).addRelationship(new Relationship(schema.getTable(tableName).getColumn(fromColumnName), schema.getDatabase().getSchema(toSchemaName).getTable(toTableName).getColumn(toColumnName), false));
             }
         }
     }

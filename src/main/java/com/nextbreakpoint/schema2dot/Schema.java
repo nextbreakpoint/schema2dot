@@ -8,11 +8,13 @@ import java.util.Map;
 import java.util.Set;
 
 public class Schema {
+    private final Database database;
     private final String name;
     private final List<Table> tables = new ArrayList<>();
     private final Map<String, Table> tableMap = new HashMap<>();
 
-    public Schema(String name) {
+    public Schema(Database database, String name) {
+        this.database = database;
         this.name = name;
     }
 
@@ -31,5 +33,9 @@ public class Schema {
 
     public Set<Table> getTables() {
         return new HashSet<>(tables);
+    }
+
+    public Database getDatabase() {
+        return database;
     }
 }
